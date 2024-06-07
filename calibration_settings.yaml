@@ -1,0 +1,11 @@
+camera0: measurement_videos/01/camL.mp4
+camera1: measurement_videos/01/camR.mp4
+frame_width: 1920
+frame_height: 1080
+mono_calibration_frames: 15
+stereo_calibration_frames: 15
+view_resize: 2
+checkerboard_box_size_scale : 65.0
+checkerboard_rows: 3
+checkerboard_columns: 5
+cooldown: 40
