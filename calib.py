@@ -157,7 +157,7 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
         if ret == True:
 
             #Convolution size used to improve corner detection. Don't make this too large.
-            conv_size = (11, 11)
+            conv_size = tuple(calibration_settings['conv_size'])
 
             #opencv can attempt to improve the checkerboard coordinates
             corners = cv.cornerSubPix(gray, corners, conv_size, (-1, -1), criteria)
@@ -295,9 +295,6 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
     c0_images = [cv.imread(imname, 1) for imname in c0_images_names]
     c1_images = [cv.imread(imname, 1) for imname in c1_images_names]
 
-    #change this if stereo calibration not good.
-    criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.001)
-
     #calibration pattern settings
     rows = calibration_settings['checkerboard_rows']
     columns = calibration_settings['checkerboard_columns']
@@ -318,6 +315,11 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
 
     #coordinates of the checkerboard in checkerboard world space.
     objpoints = [] # 3d point in real world space
+
+    #change this if stereo calibration not good.
+    # Use the criteria values from the calibration_settings file.
+    criteria_values = calibration_settings['criteria']
+    criteria = (criteria_values[0], criteria_values[1], criteria_values[2])
 
     for frame0, frame1 in zip(c0_images, c1_images):
         gray1 = cv.cvtColor(frame0, cv.COLOR_BGR2GRAY)

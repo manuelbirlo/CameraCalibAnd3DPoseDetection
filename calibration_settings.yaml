@@ -9,3 +9,5 @@ checkerboard_box_size_scale : 65.0
 checkerboard_rows: 3
 checkerboard_columns: 5
 cooldown: 40
+conv_size: [11, 11]
+criteria: [3, 100, 0.001] 
