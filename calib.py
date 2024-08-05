@@ -243,8 +243,24 @@ def preprocess_image(image):
     source: https://docs.opencv.org/4.x/d7/d4d/tutorial_py_thresholding.html
     """
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-    adaptive_thresh = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2)
-    return adaptive_thresh
+    adaptive_threshold = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2)
+    return adaptive_threshold
+
+def detect_corners(image, pattern_size, use_symmetric_binarization=False):
+    """
+    Finds the chessboard's corners using OpenCV's standard 'findChessboardCorners' 
+    or the more advanced 'findChessboardCornersSB' that is designed to be more robust 
+    under various challenging image conditions (uneven lighting, noise, low contrast). 
+    'findChessboardCornersSB' uses a concept called symmetric binarization. 
+    If the input boolean 'use_symmetric_binarization' is set to True, 
+    'findChessboardCornersSB' is being used, otherwise the standard 'findChessboardCorners' 
+    is used.
+    """
+    if use_symmetric_binarization:
+        ret, corners = cv.findChessboardCornersSB(image, pattern_size, None)
+    else:
+        ret, corners = cv.findChessboardCorners(image, pattern_size, None)
+    return ret, corners
 
 #save camera intrinsic parameters to file
 def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name):
@@ -384,13 +400,12 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
     criteria = tuple(calibration_settings['criteria'])
 
     for frame0, frame1 in zip(c0_images, c1_images):
-        #gray1 = cv.cvtColor(frame0, cv.COLOR_BGR2GRAY)
-        #gray2 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
+        pattern_size = (rows, columns)
         preprocessed_gray_image1 = preprocess_image(frame0)
         preprocessed_gray_image2 = preprocess_image(frame1)
-
-        c_ret1, corners1 = cv.findChessboardCornersSB(preprocessed_gray_image1, (rows, columns), None)
-        c_ret2, corners2 = cv.findChessboardCornersSB(preprocessed_gray_image2, (rows, columns), None)
+        
+        c_ret1, corners1 = detect_corners(preprocessed_gray_image1, pattern_size, use_symmetric_binarization=True)
+        c_ret2, corners2 = detect_corners(preprocessed_gray_image2, pattern_size, use_symmetric_binarization=True)
 
         if c_ret1 == True and c_ret2 == True:
 
@@ -540,9 +555,8 @@ def get_world_space_origin(cmtx, dist, img_path):
     objp[:,:2] = np.mgrid[0:rows,0:columns].T.reshape(-1,2)
     objp = world_scaling* objp
 
-    #gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
     preprocessed_gray_image = preprocess_image(frame)
-    ret, corners = cv.findChessboardCornersSB(preprocessed_gray_image, (rows, columns), None)
+    ret, corners = detect_corners(preprocessed_gray_image, (rows, columns), use_symmetric_binarization=True)
 
     cv.drawChessboardCorners(frame, (rows,columns), corners, ret)
     cv.putText(frame, "If you don't see detected points, try with a different image", (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
