@@ -115,7 +115,7 @@ def save_frames_single_camera(camera_name):
 
 
 #Calibrate single camera to obtain camera intrinsic parameters from saved frames.
-def calibrate_camera_for_intrinsic_parameters(images_prefix):
+def calibrate_camera_for_intrinsic_parameters(images_prefix, optimize=False):
     
     #NOTE: images_prefix contains camera name: "frames/camera0*".
     images_names = glob.glob(images_prefix)
@@ -125,8 +125,8 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
 
     #criteria used by checkerboard pattern detector.
     #Change this if the code can't find the checkerboard. 
-    criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.001)
-
+    criteria = tuple(calibration_settings['criteria'])
+   
     rows = calibration_settings['checkerboard_rows']
     columns = calibration_settings['checkerboard_columns']
     world_scaling = calibration_settings['checkerboard_box_size_scale'] #this will change to user defined length scale
@@ -154,7 +154,7 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
         ret, corners = cv.findChessboardCorners(gray, (rows, columns), None)
         print(ret)
 
-        if ret == True:
+        if ret:
 
             #Convolution size used to improve corner detection. Don't make this too large.
             conv_size = tuple(calibration_settings['conv_size'])
@@ -176,12 +176,75 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix):
 
 
     cv.destroyAllWindows()
+
+    # Perform camera calibration to obtain intrinsic and extrinsic parameters
     ret, cmtx, dist, rvecs, tvecs = cv.calibrateCamera(objpoints, imgpoints, (width, height), None, None)
-    print('rmse:', ret)
-    print('camera matrix:\n', cmtx)
-    print('distortion coeffs:', dist)
+    print('Initial rmse:', ret)
+    print('Initial camera matrix:\n', cmtx)
+    print('Initial distortion coeffs:', dist)
+    print('optimize', optimize)
+
+    if optimize:
+            print('optimize_calibration ')
+            cmtx, dist = optimize_calibration(objpoints, imgpoints, rvecs, tvecs, cmtx, dist, width, height)
+            print('optimized cmtx {}, dist {}'.format(cmtx, dist))
 
     return cmtx, dist
+
+# Calculate reprojection error
+def calculate_reprojection_error(objpoints, imgpoints, rvecs, tvecs, cmtx, dist):
+    total_error = 0
+    nr_of_objpoints = len(objpoints)
+
+    for i in range(nr_of_objpoints):
+        image_points_2D, _ = cv.projectPoints(objpoints[i], rvecs[i], tvecs[i], cmtx, dist)
+        current_error = cv.norm(imgpoints[i], image_points_2D, cv.NORM_L2) / len(image_points_2D)
+        total_error += current_error
+    mean_error = total_error / nr_of_objpoints
+    print(f"Mean reprojection error: {mean_error}")
+
+
+# Optimize calibration to minimize reprojection error
+def optimize_calibration(objpoints, imgpoints, rvecs, tvecs, cmtx, dist, width, height):
+    # Simple example of optimization: remove outlier points
+    initial_error = calculate_reprojection_error(objpoints, imgpoints, rvecs, tvecs, cmtx, dist)
+    print(f"Initial mean reprojection error: {initial_error}")
+
+    # Here we could apply more sophisticated optimization algorithms.
+    # For simplicity, let's remove the worst 10% points and recalibrate.
+    errors = []
+    for i in range(len(objpoints)):
+        image_points_2D, _ = cv.projectPoints(objpoints[i], rvecs[i], tvecs[i], cmtx, dist)
+        error = cv.norm(imgpoints[i], image_points_2D, cv.NORM_L2) / len(image_points_2D)
+        errors.append(error)
+
+    threshold = np.percentile(errors, 90)  # Remove the worst 10%
+    new_objpoints = []
+    new_imgpoints = []
+    for i in range(len(objpoints)):
+        if errors[i] < threshold:
+            new_objpoints.append(objpoints[i])
+            new_imgpoints.append(imgpoints[i])
+
+    # Recalibrate with the filtered points
+    ret, cmtx, dist, rvecs, tvecs = cv.calibrateCamera(new_objpoints, new_imgpoints, (width, height), None, None)
+    print('Optimized rmse:', ret)
+    print('Optimized camera matrix:\n', cmtx)
+    print('Optimized distortion coeffs:', dist)
+
+    return cmtx, dist
+
+def preprocess_image(image):
+    """
+    Apply adaptive thresholding
+    "The algorithm determines the threshold for a pixel based on a small region around it. 
+     So we get different thresholds for different regions
+     of the same image which gives better results for images with varying illumination."
+    source: https://docs.opencv.org/4.x/d7/d4d/tutorial_py_thresholding.html
+    """
+    gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+    adaptive_thresh = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2)
+    return adaptive_thresh
 
 #save camera intrinsic parameters to file
 def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name):
@@ -318,19 +381,21 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
 
     #change this if stereo calibration not good.
     # Use the criteria values from the calibration_settings file.
-    criteria_values = calibration_settings['criteria']
-    criteria = (criteria_values[0], criteria_values[1], criteria_values[2])
+    criteria = tuple(calibration_settings['criteria'])
 
     for frame0, frame1 in zip(c0_images, c1_images):
-        gray1 = cv.cvtColor(frame0, cv.COLOR_BGR2GRAY)
-        gray2 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
-        c_ret1, corners1 = cv.findChessboardCorners(gray1, (rows, columns), None)
-        c_ret2, corners2 = cv.findChessboardCorners(gray2, (rows, columns), None)
+        #gray1 = cv.cvtColor(frame0, cv.COLOR_BGR2GRAY)
+        #gray2 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
+        preprocessed_gray_image1 = preprocess_image(frame0)
+        preprocessed_gray_image2 = preprocess_image(frame1)
+
+        c_ret1, corners1 = cv.findChessboardCornersSB(preprocessed_gray_image1, (rows, columns), None)
+        c_ret2, corners2 = cv.findChessboardCornersSB(preprocessed_gray_image2, (rows, columns), None)
 
         if c_ret1 == True and c_ret2 == True:
 
-            corners1 = cv.cornerSubPix(gray1, corners1, (11, 11), (-1, -1), criteria)
-            corners2 = cv.cornerSubPix(gray2, corners2, (11, 11), (-1, -1), criteria)
+            corners1 = cv.cornerSubPix(preprocessed_gray_image1, corners1, (11, 11), (-1, -1), criteria)
+            corners2 = cv.cornerSubPix(preprocessed_gray_image2, corners2, (11, 11), (-1, -1), criteria)
 
             p0_c1 = corners1[0,0].astype(np.int32)
             p0_c2 = corners2[0,0].astype(np.int32)
@@ -475,8 +540,9 @@ def get_world_space_origin(cmtx, dist, img_path):
     objp[:,:2] = np.mgrid[0:rows,0:columns].T.reshape(-1,2)
     objp = world_scaling* objp
 
-    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-    ret, corners = cv.findChessboardCorners(gray, (rows, columns), None)
+    #gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+    preprocessed_gray_image = preprocess_image(frame)
+    ret, corners = cv.findChessboardCornersSB(preprocessed_gray_image, (rows, columns), None)
 
     cv.drawChessboardCorners(frame, (rows,columns), corners, ret)
     cv.putText(frame, "If you don't see detected points, try with a different image", (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
@@ -584,11 +650,11 @@ if __name__ == '__main__':
     """Step2. Obtain camera intrinsic matrices and save them"""
     #camera0 intrinsics
     images_prefix = os.path.join('frames', 'camera0*')
-    cmtx0, dist0 = calibrate_camera_for_intrinsic_parameters(images_prefix) 
+    cmtx0, dist0 = calibrate_camera_for_intrinsic_parameters(images_prefix, optimize=True) 
     save_camera_intrinsics(cmtx0, dist0, 'c0') #this will write cmtx and dist to disk  --> changed by PG
     #camera1 intrinsics
     images_prefix = os.path.join('frames', 'camera1*')
-    cmtx1, dist1 = calibrate_camera_for_intrinsic_parameters(images_prefix)
+    cmtx1, dist1 = calibrate_camera_for_intrinsic_parameters(images_prefix, optimize=True)
     save_camera_intrinsics(cmtx1, dist1, 'c1') #this will write cmtx and dist to disk  --> changed by PG
 
 
