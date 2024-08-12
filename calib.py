@@ -146,12 +146,17 @@ def calibrate_camera_for_intrinsic_parameters(images_prefix, optimize=False):
     #coordinates of the checkerboard in checkerboard world space.
     objpoints = [] # 3d point in real world space
 
+    # Choose the best detection method based on evaluation
+    use_symmetric_binarization = choose_best_detection_method(images, (rows, columns))
+    print(f"Using symmetric binarization: {use_symmetric_binarization}")
 
     for i, frame in enumerate(images):
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
 
         #find the checkerboard
-        ret, corners = cv.findChessboardCorners(gray, (rows, columns), None)
+        #ret, corners = cv.findChessboardCorners(gray, (rows, columns), None)
+        #preprocessed_gray_image1 = preprocess_image(frame, 'canny')
+        ret, corners = detect_corners(gray, (rows, columns), use_symmetric_binarization)
         print(ret)
 
         if ret:
@@ -234,17 +239,26 @@ def optimize_calibration(objpoints, imgpoints, rvecs, tvecs, cmtx, dist, width, 
 
     return cmtx, dist
 
-def preprocess_image(image):
+def preprocess_image(image, method='histogram_equalization'):
     """
-    Apply adaptive thresholding
-    "The algorithm determines the threshold for a pixel based on a small region around it. 
-     So we get different thresholds for different regions
-     of the same image which gives better results for images with varying illumination."
-    source: https://docs.opencv.org/4.x/d7/d4d/tutorial_py_thresholding.html
+    Apply different preprocessing techniques to enhance the image for better corner detection.
+    Methods available: 'adaptive_threshold', 'histogram_equalization', 'gaussian_blur', 'canny'.
     """
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-    adaptive_threshold = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2)
-    return adaptive_threshold
+    
+    if method == 'adaptive_threshold':
+        preprocessed = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2)
+    elif method == 'histogram_equalization':
+        preprocessed = cv.equalizeHist(gray)
+    elif method == 'gaussian_blur':
+        preprocessed = cv.GaussianBlur(gray, (5, 5), 0)
+    elif method == 'canny':
+        preprocessed = cv.Canny(gray, 100, 200)
+    else:
+        preprocessed = gray  # Default to grayscale if unknown method is provided
+    
+    return preprocessed
+
 
 def detect_corners(image, pattern_size, use_symmetric_binarization=False):
     """
@@ -258,9 +272,35 @@ def detect_corners(image, pattern_size, use_symmetric_binarization=False):
     """
     if use_symmetric_binarization:
         ret, corners = cv.findChessboardCornersSB(image, pattern_size, None)
+        print("cv.findChessboardCornersSB")
     else:
         ret, corners = cv.findChessboardCorners(image, pattern_size, None)
+        print("cv.findChessboardCorners")
     return ret, corners
+
+def evaluate_detection_method(images, pattern_size, use_symmetric_binarization):
+    successful_detections = 0
+    total_detections = len(images)
+    
+    for image in images:
+        gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+        ret, corners = detect_corners(gray, pattern_size, use_symmetric_binarization)
+        if ret and corners is not None:
+            successful_detections += 1
+            
+    return successful_detections / total_detections
+
+def choose_best_detection_method(images, pattern_size):
+    success_rate_standard = evaluate_detection_method(images, pattern_size, use_symmetric_binarization=False)
+    success_rate_sb = evaluate_detection_method(images, pattern_size, use_symmetric_binarization=True)
+    
+    print(f"Standard method success rate: {success_rate_standard * 100}%")
+    print(f"Symmetric binarization method success rate: {success_rate_sb * 100}%")
+    
+    if success_rate_sb > success_rate_standard:
+        return True
+    else:
+        return False
 
 #save camera intrinsic parameters to file
 def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name):
@@ -359,6 +399,7 @@ def save_frames_two_cams(camera0_name, camera1_name):
             start = True
 
         #break out of the loop when enough number of frames have been saved
+        print(f"saved_count: {saved_count}")
         if saved_count == number_to_save: break
 
     cv.destroyAllWindows()
@@ -399,18 +440,25 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, frames_prefix_c0, frames_prefix_c
     # Use the criteria values from the calibration_settings file.
     criteria = tuple(calibration_settings['criteria'])
 
+    # Choose the best detection method based on evaluation
+    use_symmetric_binarization = choose_best_detection_method(c0_images, (rows, columns))
+    print(f"Using symmetric binarization: {use_symmetric_binarization}")
+
     for frame0, frame1 in zip(c0_images, c1_images):
         pattern_size = (rows, columns)
-        preprocessed_gray_image1 = preprocess_image(frame0)
-        preprocessed_gray_image2 = preprocess_image(frame1)
-        
-        c_ret1, corners1 = detect_corners(preprocessed_gray_image1, pattern_size, use_symmetric_binarization=True)
-        c_ret2, corners2 = detect_corners(preprocessed_gray_image2, pattern_size, use_symmetric_binarization=True)
+        #preprocessed_gray_image1 = preprocess_image(frame0, 'canny')
+        #preprocessed_gray_image2 = preprocess_image(frame1, 'canny')
+        gray1 = cv.cvtColor(frame0, cv.COLOR_BGR2GRAY)
+        gray2 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
 
+        c_ret1, corners1 = detect_corners(gray1, pattern_size, use_symmetric_binarization)
+        c_ret2, corners2 = detect_corners(gray2, pattern_size, use_symmetric_binarization)
+        #print(f"len of c_ret1, corners1: {c_ret1}, {len(corners1)}")
+        #print(f"len of c_ret2, corners2: {c_ret2}, {len(corners2)}")
         if c_ret1 == True and c_ret2 == True:
 
-            corners1 = cv.cornerSubPix(preprocessed_gray_image1, corners1, (11, 11), (-1, -1), criteria)
-            corners2 = cv.cornerSubPix(preprocessed_gray_image2, corners2, (11, 11), (-1, -1), criteria)
+            corners1 = cv.cornerSubPix(gray1, corners1, (11, 11), (-1, -1), criteria)
+            corners2 = cv.cornerSubPix(gray2, corners2, (11, 11), (-1, -1), criteria)
 
             p0_c1 = corners1[0,0].astype(np.int32)
             p0_c2 = corners2[0,0].astype(np.int32)
@@ -555,8 +603,15 @@ def get_world_space_origin(cmtx, dist, img_path):
     objp[:,:2] = np.mgrid[0:rows,0:columns].T.reshape(-1,2)
     objp = world_scaling* objp
 
-    preprocessed_gray_image = preprocess_image(frame)
-    ret, corners = detect_corners(preprocessed_gray_image, (rows, columns), use_symmetric_binarization=True)
+    #preprocessed_gray_image = preprocess_image(frame, 'canny')
+    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+    # Determine the best detection method
+    use_symmetric_binarization = choose_best_detection_method([frame], (rows, columns))
+    print(f"Using symmetric binarization: {use_symmetric_binarization}")
+
+    # Detect corners using the chosen method
+    ret, corners = detect_corners(gray, (rows, columns), use_symmetric_binarization)
 
     cv.drawChessboardCorners(frame, (rows,columns), corners, ret)
     cv.putText(frame, "If you don't see detected points, try with a different image", (50,50), cv.FONT_HERSHEY_COMPLEX, 1, (0,0,255), 1)
@@ -665,10 +720,12 @@ if __name__ == '__main__':
     #camera0 intrinsics
     images_prefix = os.path.join('frames', 'camera0*')
     cmtx0, dist0 = calibrate_camera_for_intrinsic_parameters(images_prefix, optimize=True) 
+    print(f"length of cmtx0 and dist0: {len(cmtx0)}  {len(dist0)}")
     save_camera_intrinsics(cmtx0, dist0, 'c0') #this will write cmtx and dist to disk  --> changed by PG
     #camera1 intrinsics
     images_prefix = os.path.join('frames', 'camera1*')
     cmtx1, dist1 = calibrate_camera_for_intrinsic_parameters(images_prefix, optimize=True)
+    print(f"length of cmtx1 and dist1: {len(cmtx1)}  {len(dist1)}")
     save_camera_intrinsics(cmtx1, dist1, 'c1') #this will write cmtx and dist to disk  --> changed by PG
 
 
@@ -679,6 +736,8 @@ if __name__ == '__main__':
     """Step4. Use paired calibration pattern frames to obtain camera0 to camera1 rotation and translation"""
     frames_prefix_c0 = os.path.join('frames_pair', 'camera0*')
     frames_prefix_c1 = os.path.join('frames_pair', 'camera1*')
+    print(f"Length of frames_prefix_c0: {len(frames_prefix_c0)}")
+    print(f"Length of frames_prefix_c1: {len(frames_prefix_c1)}")
     R, T = stereo_calibrate(cmtx0, dist0, cmtx1, dist1, frames_prefix_c0, frames_prefix_c1)
 
 
